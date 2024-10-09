@@ -1,0 +1,10 @@
+version: '3'
+services:
+  streaming:
+    build: .
+    ports:
+      - "8080:8080"  # For WebSocket/HTTP
+      - "1935:1935"  # RTMP port
+      - "80:80"      # Nginx HTTP
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf
