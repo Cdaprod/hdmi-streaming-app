@@ -1,0 +1,1127 @@
+Creating an application with functionalities similar to YouTube and TikTok--such as live streaming, video recording, temporary storage, and user-initiated recording--requires a thoughtful approach to architecture, design patterns, and best practices. Below, I’ll outline how these popular applications manage these features and how you can apply similar strategies to your Raspberry Pi setup.
+
+1. Understanding the Core Functionalities
+
+Before diving into design patterns and best practices, let’s break down the core functionalities you aim to implement:
+
+	1.	Live Streaming: Real-time broadcasting of video from the capture device to users.
+	2.	Video Recording: Capturing segments of the live stream for later use or backup.
+	3.	Temporary Storage: Holding video data temporarily before it’s either discarded or archived.
+	4.	User-Initiated Recording: Allowing users to record segments directly from the web client.
+	5.	Backup Mechanism: Ensuring that recorded segments are saved permanently for future access.
+
+2. Design Patterns and Architectural Considerations
+
+A. Modular and Scalable Architecture
+
+Design Pattern: Microservices Architecture
+
+	•	Description: Break down the application into smaller, independent services that handle specific functionalities (e.g., streaming, recording, backup).
+	•	Application: You’ve already started this with Docker Compose by isolating services like capture_service, teleprompter_service, and nginx_service. Continue this modular approach to enhance scalability and maintainability.
+
+Benefits:
+
+	•	Scalability: Each service can be scaled independently based on demand.
+	•	Maintainability: Easier to manage, update, and debug individual services.
+	•	Flexibility: Services can be developed using different technologies best suited for their tasks.
+
+B. MVC (Model-View-Controller) Pattern for the Web Client
+
+Design Pattern: MVC Pattern
+
+	•	Description: Separates the application into three interconnected components: Model (data), View (UI), and Controller (business logic).
+	•	Application: Use this pattern in your web client to organize code efficiently.
+
+Benefits:
+
+	•	Separation of Concerns: Each component handles its specific responsibility, reducing complexity.
+	•	Reusability: Components can be reused across different parts of the application.
+	•	Ease of Testing: Individual components can be tested in isolation.
+
+C. Observer Pattern for Real-Time Updates
+
+Design Pattern: Observer Pattern
+
+	•	Description: Defines a one-to-many dependency between objects so that when one object changes state, all its dependents are notified.
+	•	Application: Implement real-time updates in your web client to reflect live stream changes or recording statuses.
+
+Benefits:
+
+	•	Real-Time Communication: Enables instantaneous updates to the UI based on backend events.
+	•	Decoupling: The backend and frontend remain decoupled, enhancing flexibility.
+
+3. Implementing Core Functionalities with Best Practices
+
+A. Live Streaming
+
+Best Practices:
+
+	1.	Efficient Video Encoding:
+	•	Use Hardware Acceleration: Utilize the Raspberry Pi’s hardware encoders (e.g., h264_omx with FFmpeg) to reduce CPU usage.
+	•	Optimize Encoding Settings: Balance quality and bitrate to ensure smooth streaming without overloading the Pi.
+	2.	Segmented Streaming Protocols:
+	•	HLS (HTTP Live Streaming): As previously discussed, HLS is suitable for compatibility and simplicity.
+	•	WebRTC (Advanced): For lower latency streaming, consider integrating WebRTC, though it requires more complex setup.
+	3.	Adaptive Bitrate Streaming:
+	•	Implement Adaptive Bitrate: Allows the stream to adjust quality based on network conditions, ensuring consistent playback.
+
+Implementation Steps:
+
+	•	FFmpeg Configuration:
+
+ffmpeg -f v4l2 -i /dev/video0 -f alsa -i hw:1,0 \
+    -c:v h264_omx -b:v 800k -c:a aac \
+    -f hls -hls_time 4 -hls_list_size 15 -hls_flags delete_segments \
+    /tmp/hls/playlist.m3u8
+
+
+	•	Nginx Configuration for HLS:
+
+server {
+    listen 80;
+
+    location /hls {
+        types {
+            application/vnd.apple.mpegurl m3u8;
+            video/mp2t ts;
+        }
+        root /tmp;
+        add_header Cache-Control no-cache;
+    }
+}
+
+
+
+B. Video Recording and Temporary Storage
+
+Best Practices:
+
+	1.	Circular Buffer Implementation:
+	•	Purpose: Maintain a rolling buffer that holds only the most recent video segments, automatically discarding the oldest data.
+	•	Implementation: Managed by FFmpeg’s HLS settings (-hls_list_size and -hls_flags delete_segments).
+	2.	Efficient File Management:
+	•	Avoid Disk Fragmentation: Store segments in a contiguous storage medium or use a filesystem optimized for frequent small file writes.
+	•	Monitor Disk Usage: Implement monitoring to prevent storage from filling up unexpectedly.
+	3.	Separation of Concerns:
+	•	Stream vs. Recording: Use distinct processes or services to handle live streaming and recording to prevent interference.
+
+Implementation Steps:
+
+	•	FFmpeg HLS Settings:
+	•	-hls_list_size 15: Keeps the last 15 segments.
+	•	-hls_flags delete_segments: Automatically deletes old segments.
+	•	Backup Recordings:
+	•	Implement a separate service or script that periodically copies recorded segments from temporary storage to permanent storage.
+
+C. User-Initiated Recording (Web Client Side)
+
+Best Practices:
+
+	1.	Client-Side Recording with MediaRecorder API:
+	•	Efficiency: Offloads recording tasks to the client, reducing server load.
+	•	User Control: Provides users with direct control over what and when to record.
+	2.	Seamless Integration:
+	•	UI/UX: Ensure the recording controls are intuitive and do not disrupt the live stream viewing experience.
+	•	Feedback Mechanisms: Provide visual indicators (e.g., recording status) to inform users about the recording process.
+	3.	Security and Permissions:
+	•	User Consent: Ensure that users are aware they are recording and have given consent.
+	•	Data Privacy: Handle recorded data securely, especially if saving on the server.
+
+Implementation Steps:
+
+	•	HTML5 and JavaScript for Recording:
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Camera Viewfinder & Recorder</title>
+</head>
+<body>
+    <h1>Camera Viewfinder (Teleprompter)</h1>
+    <video id="video-player" controls autoplay>
+        <source src="http://<Raspberry_Pi_IP>:5000/view_stream" type="application/x-mpegURL">
+    </video>
+
+    <div>
+        <button id="start-recording">Start Recording</button>
+        <button id="stop-recording" disabled>Stop Recording</button>
+        <a id="download-link" style="display: none;" download="recording.mp4">Download Recording</a>
+    </div>
+
+    <script>
+        let mediaRecorder;
+        let recordedChunks = [];
+
+        document.getElementById('start-recording').addEventListener('click', function() {
+            const videoElement = document.getElementById('video-player');
+            const stream = videoElement.captureStream();
+            mediaRecorder = new MediaRecorder(stream);
+
+            mediaRecorder.ondataavailable = function(event) {
+                if (event.data.size > 0) {
+                    recordedChunks.push(event.data);
+                }
+            };
+
+            mediaRecorder.onstop = function() {
+                const blob = new Blob(recordedChunks, { type: 'video/mp4' });
+                const url = URL.createObjectURL(blob);
+
+                const downloadLink = document.getElementById('download-link');
+                downloadLink.href = url;
+                downloadLink.style.display = 'block';
+                downloadLink.textContent = 'Download Recording';
+                recordedChunks = [];
+            };
+
+            mediaRecorder.start();
+            document.getElementById('start-recording').disabled = true;
+            document.getElementById('stop-recording').disabled = false;
+            console.log("Recording started");
+        });
+
+        document.getElementById('stop-recording').addEventListener('click', function() {
+            mediaRecorder.stop();
+            document.getElementById('start-recording').disabled = false;
+            document.getElementById('stop-recording').disabled = true;
+            console.log("Recording stopped");
+        });
+    </script>
+</body>
+</html>
+
+
+	•	Enhancements:
+	•	Progress Indicators: Show recording duration.
+	•	Error Handling: Manage scenarios where recording fails or permissions are denied.
+	•	Multiple Recordings: Allow users to record multiple segments without refreshing the page.
+
+D. Backup Mechanism
+
+Best Practices:
+
+	1.	Automated Backup Process:
+	•	Scheduled Tasks: Use cron jobs or background services to periodically move recordings from temporary to permanent storage.
+	•	Trigger-Based Backups: Initiate backups based on specific events, such as reaching storage capacity or after a certain time interval.
+	2.	Redundancy and Data Integrity:
+	•	Multiple Storage Locations: Store backups in multiple locations to prevent data loss.
+	•	Checksum Verification: Ensure that backups are accurate and uncorrupted.
+	3.	Efficient Data Transfer:
+	•	Compression: Compress video files before backing up to save space.
+	•	Batch Processing: Handle multiple files in batches to optimize performance.
+
+Implementation Steps:
+
+	•	Cron Job for Backup:
+
+# Edit the cron jobs
+crontab -e
+
+# Add the following line to run backup every hour
+0 * * * * rsync -av --remove-source-files /tmp/hls/ /mnt/camera_storage/backup/
+
+
+	•	Backup Script with Logging:
+
+#!/bin/bash
+SOURCE_DIR="/tmp/hls/"
+DEST_DIR="/mnt/camera_storage/backup/"
+LOG_FILE="/var/log/backup.log"
+
+rsync -av --remove-source-files "$SOURCE_DIR" "$DEST_DIR" >> "$LOG_FILE" 2>&1
+
+if [ $? -eq 0 ]; then
+    echo "$(date): Backup successful." >> "$LOG_FILE"
+else
+    echo "$(date): Backup failed." >> "$LOG_FILE"
+fi
+
+
+	•	Systemd Service for Advanced Backup Control:
+	•	Create a service that monitors /tmp/hls/ and initiates backups based on custom logic.
+
+E. User Interface (UI) and User Experience (UX) Best Practices
+
+Best Practices:
+
+	1.	Intuitive Controls:
+	•	Clear Buttons: Clearly label buttons like "Start Recording," "Stop Recording," and "Download Recording."
+	•	Feedback Mechanisms: Use visual cues (e.g., red dot for recording) to indicate the current state.
+	2.	Responsive Design:
+	•	Adapt to Different Devices: Ensure the UI works well on various screen sizes and devices.
+	•	Minimalistic Layout: Keep the interface clean to avoid overwhelming the user.
+	3.	Performance Optimization:
+	•	Efficient Resource Usage: Optimize frontend code to prevent lag, especially important on low-power devices like the Raspberry Pi.
+	•	Asynchronous Operations: Use asynchronous JavaScript to handle recording without freezing the UI.
+
+Implementation Steps:
+
+	•	Enhance the Frontend HTML/CSS:
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Camera Viewfinder & Recorder</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            background-color: #f0f0f0;
+            margin: 0;
+            padding: 20px;
+        }
+        video {
+            border: 2px solid #000;
+            border-radius: 8px;
+            max-width: 100%;
+            height: auto;
+        }
+        .controls {
+            margin-top: 20px;
+        }
+        button {
+            padding: 10px 20px;
+            margin: 0 10px;
+            font-size: 16px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        #start-recording {
+            background-color: #28a745;
+            color: #fff;
+        }
+        #stop-recording {
+            background-color: #dc3545;
+            color: #fff;
+        }
+        #download-link {
+            display: none;
+            margin-top: 10px;
+            font-size: 16px;
+            color: #007bff;
+        }
+    </style>
+</head>
+<body>
+    <h1>Camera Viewfinder (Teleprompter)</h1>
+    <video id="video-player" controls autoplay>
+        <source src="http://<Raspberry_Pi_IP>:5000/view_stream" type="application/x-mpegURL">
+    </video>
+
+    <div class="controls">
+        <button id="start-recording">Start Recording</button>
+        <button id="stop-recording" disabled>Stop Recording</button>
+        <br>
+        <a id="download-link" download="recording.mp4">Download Recording</a>
+    </div>
+
+    <script>
+        let mediaRecorder;
+        let recordedChunks = [];
+
+        document.getElementById('start-recording').addEventListener('click', function() {
+            const videoElement = document.getElementById('video-player');
+            const stream = videoElement.captureStream();
+            mediaRecorder = new MediaRecorder(stream);
+
+            mediaRecorder.ondataavailable = function(event) {
+                if (event.data.size > 0) {
+                    recordedChunks.push(event.data);
+                }
+            };
+
+            mediaRecorder.onstop = function() {
+                const blob = new Blob(recordedChunks, { type: 'video/mp4' });
+                const url = URL.createObjectURL(blob);
+
+                const downloadLink = document.getElementById('download-link');
+                downloadLink.href = url;
+                downloadLink.style.display = 'block';
+                recordedChunks = [];
+            };
+
+            mediaRecorder.start();
+            document.getElementById('start-recording').disabled = true;
+            document.getElementById('stop-recording').disabled = false;
+            console.log("Recording started");
+        });
+
+        document.getElementById('stop-recording').addEventListener('click', function() {
+            mediaRecorder.stop();
+            document.getElementById('start-recording').disabled = false;
+            document.getElementById('stop-recording').disabled = true;
+            console.log("Recording stopped");
+        });
+    </script>
+</body>
+</html>
+
+
+	•	Improve Accessibility:
+	•	Keyboard Shortcuts: Allow users to start/stop recording using keyboard shortcuts.
+	•	ARIA Labels: Use ARIA attributes to improve accessibility for screen readers.
+
+F. Security Considerations
+
+Best Practices:
+
+	1.	Authentication and Authorization:
+	•	Protect Streaming Endpoints: Restrict access to streaming and recording endpoints to authorized users only.
+	•	Use API Keys or Tokens: Implement secure methods for authenticating API requests.
+	2.	Secure Data Transmission:
+	•	Use HTTPS: Encrypt data in transit using SSL/TLS certificates to prevent eavesdropping.
+	•	Secure WebSockets: If using WebSockets for real-time communication, ensure they are secured.
+	3.	Input Validation and Sanitization:
+	•	Prevent Injection Attacks: Validate all inputs to the server to prevent malicious data from being processed.
+	•	Sanitize Filenames: Ensure that file names for recordings do not allow path traversal or other exploits.
+	4.	Access Control:
+	•	Role-Based Access: Define roles (e.g., admin, user) with specific permissions.
+	•	Least Privilege: Grant only the necessary permissions required for each service.
+
+Implementation Steps:
+
+	•	Enable HTTPS with Nginx:
+
+server {
+    listen 443 ssl;
+    server_name your_domain.com;
+
+    ssl_certificate /path/to/cert.pem;
+    ssl_certificate_key /path/to/key.pem;
+
+    location /hls {
+        types {
+            application/vnd.apple.mpegurl m3u8;
+            video/mp2t ts;
+        }
+        root /tmp;
+        add_header Cache-Control no-cache;
+    }
+
+    location / {
+        root /usr/share/nginx/html;
+        index index.html;
+    }
+}
+
+
+	•	Implement Authentication in Flask:
+
+from flask import Flask, send_file, request, jsonify
+from functools import wraps
+
+app = Flask(__name__)
+
+def require_api_key(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        api_key = request.headers.get('x-api-key')
+        if api_key != 'YOUR_SECURE_API_KEY':
+            return jsonify({'message': 'Unauthorized'}), 401
+        return f(*args, **kwargs)
+    return decorated
+
+@app.route('/start_stream')
+@require_api_key
+def start_stream():
+    # Start streaming
+    pass
+
+@app.route('/view_stream')
+def view_stream():
+    # Serve HLS stream
+    pass
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000, ssl_context=('cert.pem', 'key.pem'))
+
+
+	•	Sanitize User Inputs and Filenames:
+
+import os
+from werkzeug.utils import secure_filename
+
+@app.route('/save_recording', methods=['POST'])
+@require_api_key
+def save_recording():
+    filename = secure_filename(request.form['filename'])
+    filepath = os.path.join('/mnt/camera_storage/', filename)
+    # Proceed with saving the recording
+    return jsonify({'message': 'Recording saved'})
+
+
+
+G. Performance Optimization
+
+Best Practices:
+
+	1.	Resource Management:
+	•	Optimize FFmpeg Commands: Use hardware acceleration and efficient encoding settings to minimize CPU and memory usage.
+	•	Limit Concurrent Processes: Ensure that the number of simultaneous FFmpeg processes does not exceed the Pi’s capabilities.
+	2.	Efficient Code:
+	•	Asynchronous Processing: Use asynchronous frameworks (e.g., FastAPI) to handle multiple requests without blocking.
+	•	Minimize Overhead: Keep backend services lightweight to maximize performance.
+	3.	Caching and Content Delivery:
+	•	Use Caching Headers: Implement proper caching strategies to reduce server load.
+	•	Leverage CDN (Optional): For larger deployments, consider using a CDN to distribute the load, though this may not be necessary for a local setup.
+
+Implementation Steps:
+
+	•	Use FastAPI for Asynchronous Operations:
+
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
+import subprocess
+
+app = FastAPI()
+
+@app.post("/start_stream")
+async def start_stream():
+    try:
+        subprocess.Popen(['ffmpeg', '-f', 'v4l2', '-i', '/dev/video0', '-f', 'alsa', '-i', 'hw:1,0',
+                          '-c:v', 'h264_omx', '-b:v', '800k', '-c:a', 'aac', '-strict', 'experimental',
+                          '-f', 'hls', '-hls_time', '4', '-hls_list_size', '15', '-hls_flags', 'delete_segments',
+                          '/tmp/hls/playlist.m3u8'])
+        return {"message": "Stream started"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/view_stream")
+async def view_stream():
+    return FileResponse('/tmp/hls/playlist.m3u8', media_type='application/vnd.apple.mpegurl')
+
+if __name__ == '__main__':
+    import uvicorn
+    uvicorn.run(app, host='0.0.0.0', port=5000)
+
+
+	•	Optimize Frontend Code:
+	•	Lazy Loading: Load only necessary components initially to speed up page load times.
+	•	Minify JavaScript and CSS: Reduce file sizes for faster downloads.
+
+3. Leveraging Technologies and Libraries
+
+A. Backend Technologies
+
+	1.	Python Frameworks:
+	•	FastAPI: Modern, fast (high-performance) web framework for building APIs with Python 3.6+.
+	•	Flask: Lightweight web framework, simpler but synchronous by default.
+	2.	FFmpeg Integration:
+	•	ffmpeg-python: A Python wrapper for FFmpeg, allowing for more manageable FFmpeg commands within Python scripts.
+	3.	Docker:
+	•	Continue using Docker Compose to manage and orchestrate your services efficiently.
+
+B. Frontend Technologies
+
+	1.	JavaScript Libraries:
+	•	HLS.js: A JavaScript library that plays HLS streams in browsers that do not support HLS natively (e.g., Chrome, Firefox).
+	•	React/Vue.js (Optional): If your web client grows in complexity, consider using a frontend framework for better state management and component reuse.
+	2.	MediaRecorder API:
+	•	Functionality: Enables recording of media streams (audio and video) directly in the browser.
+	•	Browser Compatibility: Ensure that the browsers used support this API.
+	3.	WebSockets (Optional):
+	•	Real-Time Communication: For features like real-time notifications or live chat alongside the stream.
+
+C. Security Libraries
+
+	1.	HTTPS:
+	•	Certbot: Use Let’s Encrypt’s Certbot to obtain SSL certificates for Nginx.
+	2.	Authentication:
+	•	Flask-JWT-Extended or FastAPI’s OAuth2: Implement token-based authentication for secure API access.
+	3.	Input Validation:
+	•	Pydantic (with FastAPI): For validating request data.
+
+4. Step-by-Step Implementation Plan
+
+To align with the best practices and design patterns used by YouTube and TikTok, follow this structured implementation plan:
+
+Step 1: Finalize Architecture
+
+	•	Define Services:
+	•	Capture Service: Handles video/audio input and streaming.
+	•	Web Server (Nginx): Serves HLS streams and web client files.
+	•	API Server (FastAPI/Flask): Manages stream control, recording, and backup.
+	•	Backup Service: Periodically archives recordings.
+	•	Directory Structure:
+
+project_root/
+├── web_client/
+│   ├── index.html
+│   ├── styles.css
+│   └── app.js
+├── capture_service/
+│   ├── Dockerfile
+│   └── start_stream.sh
+├── api_server/
+│   ├── Dockerfile
+│   ├── main.py
+│   └── requirements.txt
+├── nginx_service/
+│   ├── Dockerfile
+│   └── nginx.conf
+├── backup_service/
+│   ├── Dockerfile
+│   └── backup.sh
+└── docker-compose.yml
+
+
+
+Step 2: Set Up Backend Services
+
+A. Capture Service
+
+	•	Dockerfile:
+
+FROM debian:bullseye
+
+# Install FFmpeg and dependencies
+RUN apt-get update && apt-get install -y ffmpeg
+
+# Copy the start script
+COPY start_stream.sh /start_stream.sh
+RUN chmod +x /start_stream.sh
+
+CMD ["/start_stream.sh"]
+
+
+	•	start_stream.sh:
+
+#!/bin/bash
+ffmpeg -f v4l2 -i /dev/video0 -f alsa -i hw:1,0 \
+    -c:v h264_omx -b:v 800k -c:a aac \
+    -f hls -hls_time 4 -hls_list_size 15 -hls_flags delete_segments \
+    /tmp/hls/playlist.m3u8
+
+
+
+B. API Server (FastAPI Example)
+
+	•	Dockerfile:
+
+FROM python:3.9-slim
+
+# Install dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy API code
+COPY main.py /main.py
+
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "5000"]
+
+
+	•	requirements.txt:
+
+fastapi
+uvicorn
+
+
+	•	main.py:
+
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
+import subprocess
+import os
+
+app = FastAPI()
+
+@app.post("/start_stream")
+async def start_stream():
+    try:
+        subprocess.Popen(['ffmpeg', '-f', 'v4l2', '-i', '/dev/video0', '-f', 'alsa', '-i', 'hw:1,0',
+                          '-c:v', 'h264_omx', '-b:v', '800k', '-c:a', 'aac',
+                          '-f', 'hls', '-hls_time', '4', '-hls_list_size', '15', '-hls_flags', 'delete_segments',
+                          '/tmp/hls/playlist.m3u8'])
+        return {"message": "Stream started"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/view_stream")
+async def view_stream():
+    if not os.path.exists('/tmp/hls/playlist.m3u8'):
+        raise HTTPException(status_code=404, detail="Stream not found")
+    return FileResponse('/tmp/hls/playlist.m3u8', media_type='application/vnd.apple.mpegurl')
+
+@app.post("/save_recording")
+async def save_recording():
+    # Implement logic to save recording from HLS stream to permanent storage
+    try:
+        subprocess.Popen(['ffmpeg', '-i', '/tmp/hls/playlist.m3u8', '/mnt/camera_storage/recording_{}.mp4'.format(int(time.time()))])
+        return {"message": "Recording started"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+
+C. Backup Service
+
+	•	Dockerfile:
+
+FROM debian:bullseye
+
+# Install rsync
+RUN apt-get update && apt-get install -y rsync cron
+
+# Copy backup script and cron job
+COPY backup.sh /backup.sh
+RUN chmod +x /backup.sh
+
+COPY crontab /etc/cron.d/backup-cron
+
+# Apply cron job
+RUN crontab /etc/cron.d/backup-cron
+
+CMD ["cron", "-f"]
+
+
+	•	backup.sh:
+
+#!/bin/bash
+SOURCE_DIR="/tmp/hls/"
+DEST_DIR="/mnt/camera_storage/backup/"
+LOG_FILE="/var/log/backup.log"
+
+rsync -av --remove-source-files "$SOURCE_DIR" "$DEST_DIR" >> "$LOG_FILE" 2>&1
+
+if [ $? -eq 0 ]; then
+    echo "$(date): Backup successful." >> "$LOG_FILE"
+else
+    echo "$(date): Backup failed." >> "$LOG_FILE"
+fi
+
+
+	•	crontab:
+
+# Run backup every hour
+0 * * * * /backup.sh
+
+
+
+Step 3: Configure Nginx Service
+
+	•	Dockerfile:
+
+FROM nginx:latest
+
+# Copy custom Nginx configuration
+COPY nginx.conf /etc/nginx/nginx.conf
+
+# Copy web client files
+COPY ../web_client/ /usr/share/nginx/html/
+
+EXPOSE 80 443 1935
+
+
+	•	nginx.conf:
+
+worker_processes auto;
+events {
+    worker_connections 1024;
+}
+
+http {
+    include       mime.types;
+    default_type  application/octet-stream;
+
+    sendfile        on;
+    keepalive_timeout  65;
+
+    server {
+        listen 80;
+
+        # Redirect HTTP to HTTPS
+        return 301 https://$host$request_uri;
+    }
+
+    server {
+        listen 443 ssl;
+        server_name your_domain.com;
+
+        ssl_certificate /path/to/cert.pem;
+        ssl_certificate_key /path/to/key.pem;
+
+        location /hls {
+            types {
+                application/vnd.apple.mpegurl m3u8;
+                video/mp2t ts;
+            }
+            root /tmp;
+            add_header Cache-Control no-cache;
+        }
+
+        location / {
+            root /usr/share/nginx/html;
+            index index.html;
+        }
+    }
+}
+
+rtmp {
+    server {
+        listen 1935;
+        chunk_size 4096;
+
+        application live {
+            live on;
+            hls on;
+            hls_path /tmp/hls;
+            hls_fragment 4;
+            hls_playlist_length 15;
+            hls_sync 1s;
+        }
+    }
+}
+
+
+
+Step 4: Develop the Web Client
+
+	•	HTML, CSS, and JavaScript:
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Teleprompter Viewfinder</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <h1>Teleprompter Viewfinder</h1>
+    <video id="video-player" controls autoplay>
+        <source src="/hls/playlist.m3u8" type="application/x-mpegURL">
+    </video>
+
+    <div class="controls">
+        <button id="start-recording">Start Recording</button>
+        <button id="stop-recording" disabled>Stop Recording</button>
+        <a id="download-link" style="display: none;" download="recording.mp4">Download Recording</a>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
+
+
+	•	styles.css:
+
+body {
+    font-family: Arial, sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    background-color: #f0f0f0;
+    margin: 0;
+    padding: 20px;
+}
+video {
+    border: 2px solid #000;
+    border-radius: 8px;
+    max-width: 100%;
+    height: auto;
+}
+.controls {
+    margin-top: 20px;
+}
+button {
+    padding: 10px 20px;
+    margin: 0 10px;
+    font-size: 16px;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+}
+#start-recording {
+    background-color: #28a745;
+    color: #fff;
+}
+#stop-recording {
+    background-color: #dc3545;
+    color: #fff;
+}
+#download-link {
+    display: none;
+    margin-top: 10px;
+    font-size: 16px;
+    color: #007bff;
+}
+
+
+	•	app.js:
+
+let mediaRecorder;
+let recordedChunks = [];
+
+document.getElementById('start-recording').addEventListener('click', function() {
+    const videoElement = document.getElementById('video-player');
+    const stream = videoElement.captureStream();
+    mediaRecorder = new MediaRecorder(stream);
+
+    mediaRecorder.ondataavailable = function(event) {
+        if (event.data.size > 0) {
+            recordedChunks.push(event.data);
+        }
+    };
+
+    mediaRecorder.onstop = function() {
+        const blob = new Blob(recordedChunks, { type: 'video/mp4' });
+        const url = URL.createObjectURL(blob);
+
+        const downloadLink = document.getElementById('download-link');
+        downloadLink.href = url;
+        downloadLink.style.display = 'block';
+        downloadLink.textContent = 'Download Recording';
+        recordedChunks = [];
+    };
+
+    mediaRecorder.start();
+    document.getElementById('start-recording').disabled = true;
+    document.getElementById('stop-recording').disabled = false;
+    console.log("Recording started");
+});
+
+document.getElementById('stop-recording').addEventListener('click', function() {
+    mediaRecorder.stop();
+    document.getElementById('start-recording').disabled = false;
+    document.getElementById('stop-recording').disabled = true;
+    console.log("Recording stopped");
+});
+
+
+
+Step 5: Integrate Services with Docker Compose
+
+	•	docker-compose.yml:
+
+version: '3'
+services:
+  capture_service:
+    build: ./capture_service
+    devices:
+      - "/dev/video0:/dev/video0"
+      - "/dev/snd:/dev/snd"
+    volumes:
+      - /tmp/hls:/tmp/hls
+      - /mnt/camera_storage:/mnt/camera_storage
+    restart: always
+
+  api_server:
+    build: ./api_server
+    ports:
+      - "5000:5000"
+    volumes:
+      - /tmp/hls:/tmp/hls
+      - /mnt/camera_storage:/mnt/camera_storage
+    restart: always
+
+  nginx_service:
+    build: ./nginx_service
+    ports:
+      - "80:80"
+      - "443:443"
+      - "1935:1935"
+    volumes:
+      - /tmp/hls:/tmp/hls
+      - ./web_client:/usr/share/nginx/html
+      - /path/to/cert.pem:/path/to/cert.pem
+      - /path/to/key.pem:/path/to/key.pem
+    restart: always
+
+  backup_service:
+    build: ./backup_service
+    volumes:
+      - /tmp/hls:/tmp/hls
+      - /mnt/camera_storage:/mnt/camera_storage
+    restart: always
+
+
+
+Notes:
+
+	•	Volumes: Ensure that directories are correctly mapped between the host and containers for persistent storage.
+	•	Security: Mount SSL certificates securely; consider using Docker secrets for sensitive data.
+
+5. Leveraging Programming Design Patterns and Best Practices
+
+A. Separation of Concerns
+
+	•	Backend vs. Frontend: Clearly separate backend services (streaming, API, backup) from the frontend (web client).
+	•	Service Responsibilities: Each microservice should have a single responsibility, simplifying development and debugging.
+
+B. Asynchronous Processing
+
+	•	Non-Blocking Operations: Use asynchronous frameworks (e.g., FastAPI with Uvicorn) to handle multiple concurrent requests without blocking the main thread.
+	•	Event-Driven Architecture: Implement event-driven mechanisms (e.g., using WebSockets) for real-time updates and notifications.
+
+C. Efficient Resource Utilization
+
+	•	Hardware Constraints: Optimize services to run efficiently on Raspberry Pi Zero W 2 by minimizing resource-heavy processes.
+	•	Lightweight Frameworks: Choose lightweight frameworks and libraries that do not add significant overhead.
+
+D. Robust Error Handling and Logging
+
+	•	Comprehensive Logging: Implement logging for all services to monitor performance and troubleshoot issues.
+	•	Graceful Degradation: Ensure that services can handle failures gracefully without crashing the entire application.
+
+E. Security Best Practices
+
+	•	Authentication and Authorization: Secure APIs with proper authentication mechanisms to prevent unauthorized access.
+	•	Data Encryption: Encrypt sensitive data both in transit (using HTTPS) and at rest (using filesystem encryption if necessary).
+	•	Input Validation: Rigorously validate and sanitize all inputs to prevent injection attacks and other vulnerabilities.
+
+F. Scalability and Maintainability
+
+	•	Containerization: Continue using Docker to encapsulate services, making it easier to manage dependencies and scale individual components.
+	•	Version Control: Use Git to manage code versions, enabling collaboration and tracking changes over time.
+	•	Continuous Integration/Continuous Deployment (CI/CD): Implement CI/CD pipelines to automate testing and deployment, ensuring consistent and reliable updates.
+
+6. Comparing with YouTube and TikTok’s Implementation
+
+A. YouTube and TikTok: High-Level Overview
+
+	1.	Infrastructure:
+	•	Distributed Servers: Use a network of servers and CDNs to handle massive amounts of data and traffic.
+	•	Scalable Storage: Implement scalable storage solutions to store user-generated content efficiently.
+	•	Load Balancing: Use load balancers to distribute incoming traffic evenly across servers.
+	2.	Streaming Protocols:
+	•	Adaptive Streaming: Utilize adaptive bitrate streaming (HLS, DASH) to deliver content efficiently based on user bandwidth.
+	•	Low Latency Streaming: Implement protocols like WebRTC for features requiring real-time interaction.
+	3.	Recording and Processing:
+	•	Transcoding Pipelines: Use robust transcoding pipelines to convert user-uploaded videos into multiple formats and resolutions.
+	•	Metadata Management: Store and manage extensive metadata for videos to facilitate search, recommendations, and analytics.
+	4.	Frontend Technologies:
+	•	Responsive UI: Design highly responsive and intuitive user interfaces.
+	•	Real-Time Features: Implement real-time interactions like live comments, likes, and shares.
+	5.	Security and Compliance:
+	•	Content Moderation: Use automated and manual processes to moderate content.
+	•	User Privacy: Ensure compliance with privacy regulations (e.g., GDPR).
+
+B. Applying Similar Principles to Your Project
+
+While YouTube and TikTok operate at a much larger scale, you can adopt their fundamental principles on a smaller scale:
+
+	1.	Modular Services:
+	•	Service Isolation: Like YouTube’s microservices, isolate different functionalities (streaming, recording, backup) into separate services.
+	2.	Efficient Streaming:
+	•	Adaptive Bitrate: Implement adaptive bitrate streaming within your constraints to optimize for varying network conditions.
+	3.	Scalable Storage Solutions:
+	•	Efficient Storage Management: Use strategies like circular buffers and periodic backups to manage storage efficiently, akin to scalable storage in large platforms.
+	4.	Robust Recording Mechanisms:
+	•	Transcoding: While not as extensive as YouTube, ensure your recordings are in standardized formats (e.g., MP4) for compatibility.
+	5.	User Interface and Experience:
+	•	Intuitive Design: Focus on creating a user-friendly interface that allows easy streaming and recording, mirroring the simplicity of mobile apps.
+	6.	Security and Privacy:
+	•	Secure Access: Implement secure access controls and data encryption to protect your streams and recordings.
+
+7. Final Recommendations
+
+A. Start Simple and Iterate
+
+	•	Initial Setup: Begin with a basic implementation that streams live video and allows client-side recording.
+	•	Incremental Enhancements: Gradually add features like server-side recording, backups, and advanced UI controls.
+	•	Testing: Continuously test each component to ensure stability and performance on the Raspberry Pi.
+
+B. Optimize for Performance
+
+	•	Resource Monitoring: Use tools like htop, top, or Docker’s resource stats to monitor CPU and memory usage.
+	•	Optimize FFmpeg Commands: Fine-tune FFmpeg settings to balance quality and performance.
+
+C. Ensure Robust Security
+
+	•	Regular Updates: Keep all software and dependencies up to date to mitigate security vulnerabilities.
+	•	Secure Configurations: Harden Nginx and other services by disabling unnecessary modules and enforcing strong security configurations.
+
+D. Documentation and Maintenance
+
+	•	Document Your Setup: Maintain clear documentation for your services, configurations, and deployment processes.
+	•	Automate Deployments: Use scripts or CI/CD pipelines to automate the deployment and scaling of your services.
+
+E. Explore Advanced Features (Optional)
+
+	•	Real-Time Chat or Annotations: Add features that allow real-time interaction or annotations on the live stream.
+	•	Analytics Dashboard: Implement a dashboard to monitor stream performance, recording statuses, and storage usage.
+	•	User Accounts and Permissions: Allow multiple users with different access levels to interact with the streaming and recording functionalities.
+
+8. Example: Comprehensive Docker Compose Setup
+
+Here’s a more comprehensive example of your docker-compose.yml, incorporating the discussed services and configurations:
+
+version: '3.8'
+services:
+  capture_service:
+    build: ./capture_service
+    devices:
+      - "/dev/video0:/dev/video0"
+      - "/dev/snd:/dev/snd"
+    volumes:
+      - /tmp/hls:/tmp/hls
+      - /mnt/camera_storage:/mnt/camera_storage
+    restart: always
+    networks:
+      - streaming_net
+
+  api_server:
+    build: ./api_server
+    ports:
+      - "5000:5000"
+    volumes:
+      - /tmp/hls:/tmp/hls
+      - /mnt/camera_storage:/mnt/camera_storage
+    restart: always
+    networks:
+      - streaming_net
+
+  nginx_service:
+    build: ./nginx_service
+    ports:
+      - "80:80"
+      - "443:443"
+      - "1935:1935"
+    volumes:
+      - /tmp/hls:/tmp/hls
+      - ./web_client:/usr/share/nginx/html
+      - /path/to/cert.pem:/path/to/cert.pem
+      - /path/to/key.pem:/path/to/key.pem
+    restart: always
+    networks:
+      - streaming_net
+
+  backup_service:
+    build: ./backup_service
+    volumes:
+      - /tmp/hls:/tmp/hls
+      - /mnt/camera_storage:/mnt/camera_storage
+    restart: always
+    networks:
+      - streaming_net
+
+networks:
+  streaming_net:
+    driver: bridge
+
+Notes:
+
+	•	Networks: All services are connected via the streaming_net network to allow inter-service communication.
+	•	Volumes: Persistent storage is mapped correctly to ensure data is not lost when containers restart.
+	•	Restart Policies: Services are set to always restart to enhance reliability.
+
+Conclusion
+
+By adopting modular architecture, leveraging appropriate design patterns, and following best practices in security, performance optimization, and user experience design, you can create a robust application that mirrors the functionalities of platforms like YouTube and TikTok on a Raspberry Pi Zero W 2. While the scale differs, the foundational principles remain applicable and can guide you in developing an efficient, maintainable, and user-friendly streaming and recording system.
+
+Key Takeaways:
+
+	•	Modular Architecture: Keep services isolated for better scalability and maintenance.
+	•	Efficient Streaming and Recording: Utilize hardware acceleration and optimized encoding settings.
+	•	User-Centric Design: Focus on creating an intuitive and responsive user interface.
+	•	Robust Security: Implement strong security measures to protect your data and services.
+	•	Iterative Development: Start with basic functionalities and iteratively add advanced features.
+
+Feel free to reach out if you need further assistance with specific components or have additional questions!
